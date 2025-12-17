@@ -24,6 +24,11 @@
 │   ├── config.json          # 配置文件
 │   ├── libwebsocket_client.so  # 编译后的库文件
 │   └── example              # 编译后的可执行文件
+├── ros2/                    # ROS2节点
+│   ├── src/websocket_node.cpp
+│   ├── launch/websocket.launch.py
+│   ├── CMakeLists.txt
+│   └── package.xml
 ├── docs/                    # 文档目录
 ├── build.sh                 # 构建脚本
 ├── run.sh                   # 运行脚本
@@ -46,6 +51,25 @@ go run main.go
 # 运行
 ./run.sh
 ```
+
+### ROS2节点
+```bash
+# 先构建Go库
+./build.sh
+
+# 构建ROS2包
+cd ros2
+colcon build
+
+# 运行节点
+source install/setup.bash
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../cpp
+ros2 launch websocket_client_ros websocket.launch.py
+```
+
+### ROS2话题
+- `websocket/recv` (std_msgs/String): 接收WebSocket消息
+- `websocket/send` (std_msgs/String): 发送WebSocket消息
 
 ## C++ API接口
 ```cpp
