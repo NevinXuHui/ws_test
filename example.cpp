@@ -1,41 +1,40 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <atomic>
 #include "websocket_client.h"
 
+std::atomic<bool> running(true);
+
+void onMessage(const char* message) {
+    std::cout << "[C++回调] 收到消息: " << message << std::endl;
+}
+
+void onDisconnect() {
+    std::cout << "[C++回调] 连接已断开!" << std::endl;
+    running = false;
+}
+
 int main() {
-    // 连接WebSocket
-    int result = ConnectWebSocket(
-        "1222004229866666660001505",  // deviceId
-        "FC23CD911857",               // macId
-        "1222004229866666660001505",  // sn
-        "866666660001505",            // cmei
-        "591884",                     // deviceType
-        "1.0.1",                      // firmwareVersion
-        "1.0.7",                      // softwareVersion
-        "1.0.7",                      // sdkVersion
-        "1",                          // innerType
-        "14mrrGJH"                    // snPwd
-    );
+    std::cout << "连接WebSocket..." << std::endl;
     
-    if (result != 0) {
-        std::cerr << "Connection failed: " << result << std::endl;
+    // 设置回调
+    SetMessageCallback(onMessage);
+    SetDisconnectCallback(onDisconnect);
+    
+    // 使用配置文件连接
+    int ret = ConnectWithConfig("config.json");
+    if (ret != 0) {
+        std::cerr << "连接失败: " << ret << std::endl;
         return -1;
     }
     
-    std::cout << "WebSocket connected successfully!" << std::endl;
-    
-    // 发送测试消息
-    SendMessage("{\"test\": \"message from C++\"}");
-    
-    // 保持连接30秒
-    for (int i = 0; i < 30 && IsConnected(); i++) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "Connected for " << (i+1) << " seconds..." << std::endl;
+    // 运行直到断开或超时30秒
+    for (int i = 0; i < 300 && running && IsConnected(); i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
-    // 断开连接
     Disconnect();
-    std::cout << "Disconnected" << std::endl;
+    std::cout << "程序结束" << std::endl;
     return 0;
 }
