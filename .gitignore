@@ -1,61 +1,33 @@
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
+# 编译产物
 *.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-
-# C++ compiled files
 *.o
 *.a
-*.obj
-
-# Executables
 example
-main
+cpp/libwebsocket_client.so
+cpp/example
 
-# Library files
-libwebsocket_client.*
+# ROS2构建文件
+ros2/build/
+ros2/install/
+ros2/log/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
 
-# Generated header files from Go
-websocket_client.h
+# Go构建文件
+go/go.sum
 
-# IDE files
+# 配置文件（可能包含敏感信息）
+cpp/config.json
+
+# 编辑器文件
 .vscode/
-.idea/
-.lh/
 *.swp
 *.swo
 *~
 
-# OS generated files
+# 系统文件
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-
-# Log files
-*.log
-
-# Temporary files
-*.tmp
-*.temp
-
-# Build directories
-build/
-dist/
+.lh
+.history
