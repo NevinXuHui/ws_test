@@ -1,7 +1,26 @@
 #!/bin/bash
-source /opt/ros/humble/setup.bash
+
+cd "$(dirname "$0")"
+
+ARCH=$(uname -m)
+
+# 自动检测ROS2版本
+if [ -f /opt/ros/jazzy/setup.bash ]; then
+    source /opt/ros/jazzy/setup.bash
+elif [ -f /opt/ros/iron/setup.bash ]; then
+    source /opt/ros/iron/setup.bash
+elif [ -f /opt/ros/humble/setup.bash ]; then
+    source /opt/ros/humble/setup.bash
+elif [ -f /opt/ros/galactic/setup.bash ]; then
+    source /opt/ros/galactic/setup.bash
+else
+    echo "未找到ROS2安装"
+    exit 1
+fi
+
 source install/setup.bash
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../cpp
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/src/websocket_client_ros/lib/$ARCH
 export RCUTILS_COLORIZED_OUTPUT=1
-export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{time}] [{name}]: {message}"
-ros2 run websocket_client_ros websocket_node
+export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{name}]: {message}"
+
+ros2 launch websocket_client_ros websocket.launch.py

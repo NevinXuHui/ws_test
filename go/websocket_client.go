@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -37,7 +38,41 @@ var (
 	mu        sync.Mutex
 	stopChan  chan struct{}
 	deviceCfg map[string]interface{}
+	logger    *log.Logger
+	logFile   *os.File
 )
+
+func initLogger(path string, logToConsole bool) {
+	if path == "" {
+		logger = log.New(os.Stdout, "", 0)
+		return
+	}
+	// 如果是目录，自动生成带日期的文件名
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		path = fmt.Sprintf("%s/websocket_%s.log", path, time.Now().Format("2006-01-02"))
+	} else if err != nil {
+		os.MkdirAll(path, 0755)
+		path = fmt.Sprintf("%s/websocket_%s.log", path, time.Now().Format("2006-01-02"))
+	}
+	var err error
+	logFile, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		logger = log.New(os.Stdout, "", 0)
+		return
+	}
+	if logToConsole {
+		logger = log.New(io.MultiWriter(os.Stdout, logFile), "", 0)
+	} else {
+		logger = log.New(logFile, "", 0)
+	}
+}
+
+func logf(format string, args ...interface{}) {
+	if logger == nil {
+		logger = log.New(os.Stdout, "", 0)
+	}
+	logger.Printf("[%s] "+format, append([]interface{}{now()}, args...)...)
+}
 
 //export SetMessageCallback
 func SetMessageCallback(cb C.MessageCallback) {
@@ -54,17 +89,24 @@ func ConnectWithConfig(configPath *C.char) C.int {
 	path := C.GoString(configPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Printf("[%s] 读取配置文件失败: %v\n", now(), err)
+		logf("读取配置文件失败: %v", err)
 		return -3
 	}
 
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Printf("[%s] 解析配置文件失败: %v\n", now(), err)
+		logf("解析配置文件失败: %v", err)
 		return -4
 	}
 
-	fmt.Printf("[%s] 加载配置: %s\n", now(), path)
+	// 初始化日志
+	logToConsole := true
+	if v, ok := cfg["logToConsole"].(bool); ok {
+		logToConsole = v
+	}
+	initLogger(getStr(cfg, "logPath", ""), logToConsole)
+
+	logf("加载配置: %s", path)
 	return doConnect(cfg)
 }
 
@@ -88,13 +130,13 @@ func doConnect(cfg map[string]interface{}) C.int {
 
 	wsURL, err := getURL(deviceCfg)
 	if err != nil {
-		fmt.Printf("[%s] 获取URL失败: %v\n", now(), err)
+		logf("获取URL失败: %v", err)
 		return -1
 	}
 
 	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		fmt.Printf("[%s] 连接失败: %v\n", now(), err)
+		logf("连接失败: %v", err)
 		return -2
 	}
 
@@ -102,7 +144,7 @@ func doConnect(cfg map[string]interface{}) C.int {
 	connected = true
 	stopChan = make(chan struct{})
 
-	fmt.Printf("[%s] WebSocket连接成功\n", now())
+	logf("WebSocket连接成功")
 
 	sendHB()
 	go heartbeatLoop()
@@ -125,7 +167,11 @@ func Disconnect() {
 			conn.Close()
 			conn = nil
 		}
-		fmt.Printf("[%s] 已断开连接\n", now())
+		logf("已断开连接")
+	}
+	if logFile != nil {
+		logFile.Close()
+		logFile = nil
 	}
 }
 
@@ -186,7 +232,7 @@ func messageLoop() {
 
 		_, msg, err := c.ReadMessage()
 		if err != nil {
-			fmt.Printf("[%s] 连接断开: %v\n", now(), err)
+			logf("连接断开: %v", err)
 			mu.Lock()
 			connected = false
 			mu.Unlock()
@@ -197,7 +243,7 @@ func messageLoop() {
 		}
 
 		msgStr := string(msg)
-		fmt.Printf("[%s] 收到: %s\n", now(), msgStr)
+		logf("收到: %s", msgStr)
 
 		// 调用消息回调
 		cMsg := C.CString(msgStr)
@@ -219,7 +265,7 @@ func sendHB() {
 	}
 	data, _ := json.Marshal(hb)
 	conn.WriteMessage(websocket.TextMessage, data)
-	fmt.Printf("[%s] 心跳已发送\n", now())
+	logf("心跳已发送")
 }
 
 func getStr(cfg map[string]interface{}, key, def string) string {
@@ -269,26 +315,26 @@ func getURL(cfg map[string]interface{}) (string, error) {
 	body, _ := json.Marshal(req)
 	apiURL := getStr(cfg, "apiUrl", "https://business.homibot.komect.com:9443/robot/business/api/device/client/connect/url")
 
-	fmt.Printf("[%s] 请求URL: %s\n", now(), apiURL)
-	fmt.Printf("[%s] 请求Body: %s\n", now(), string(body))
+	logf("请求URL: %s", apiURL)
+	logf("请求Body: %s", string(body))
 
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(body))
 	if err != nil {
-		fmt.Printf("[%s] 请求失败: %v\n", now(), err)
+		logf("请求失败: %v", err)
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	fmt.Printf("[%s] 响应状态: %s\n", now(), resp.Status)
-	fmt.Printf("[%s] 响应Body: %s\n", now(), string(respBody))
+	logf("响应状态: %s", resp.Status)
+	logf("响应Body: %s", string(respBody))
 
 	var result map[string]interface{}
 	json.Unmarshal(respBody, &result)
 
 	if d, ok := result["data"].(map[string]interface{}); ok {
 		if url, ok := d["url"].(string); ok {
-			fmt.Printf("[%s] 获取到WebSocket URL: %s\n", now(), url)
+			logf("获取到WebSocket URL: %s", url)
 			return url, nil
 		}
 	}

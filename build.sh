@@ -5,22 +5,17 @@ echo "=== 构建WebSocket客户端库 ==="
 
 cd "$(dirname "$0")"
 
-# 安装Go依赖
-cd go
-go mod tidy
-
-# 编译共享库到cpp目录
+# 编译Go共享库
 echo "编译Go共享库..."
-go build -buildmode=c-shared -o ../cpp/libwebsocket_client.so websocket_client.go
-cd ..
+./go/build.sh
 
 # 编译C++示例
-if command -v g++ &> /dev/null; then
-    echo "编译C++示例..."
-    cd cpp
-    g++ -std=c++11 -o example example.cpp -L. -lwebsocket_client -lpthread
-    cd ..
-fi
+echo "编译C++示例..."
+cd cpp && make && cd ..
+
+# 编译ROS2节点
+echo "编译ROS2节点..."
+./ros2_ws/build_ros.sh
 
 echo ""
 echo "=== 构建完成 ==="

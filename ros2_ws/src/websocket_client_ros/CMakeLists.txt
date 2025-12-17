@@ -11,13 +11,15 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(homi_speech_interface REQUIRED)
 
+# 获取架构
+execute_process(COMMAND uname -m OUTPUT_VARIABLE ARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+
 include_directories(
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../../cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 link_directories(
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../../cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/lib/${ARCH}
 )
 
 add_executable(websocket_node src/websocket_node.cpp)
@@ -33,5 +35,6 @@ target_link_libraries(websocket_node websocket_client)
 
 install(TARGETS websocket_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 ament_package()

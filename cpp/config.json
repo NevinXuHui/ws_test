@@ -11,6 +11,8 @@
     "innerType": "1",
     "snPwd": "14mrrGJH",
     "applicationVersion": "1.0.7",
+    "logPath": "/mine/ws_test_log",
+    "logToConsole": true,
     "otaVersions": [
         {"currentVersion": "1.0.0", "versionCode": 0, "versionType": 301},
         {"currentVersion": "1.0.0", "versionCode": 0, "versionType": 302},
