@@ -5,10 +5,10 @@ from launch.substitutions import LaunchConfiguration
 import os
 
 def generate_launch_description():
-    config_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        'cpp', 'config.json'
-    )
+    # 获取cpp目录下的config.json
+    pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(pkg_dir, '..', 'cpp', 'config.json')
+    config_path = os.path.abspath(config_path)
     
     return LaunchDescription([
         DeclareLaunchArgument(
