@@ -17,6 +17,9 @@ elif [ -f /opt/ros/humble/setup.bash ]; then
 elif [ -f /opt/ros/galactic/setup.bash ]; then
     source /opt/ros/galactic/setup.bash
     ROS_DISTRO=galactic
+elif [ -f /opt/ros/foxy/setup.bash ]; then
+    source /opt/ros/foxy/setup.bash
+    ROS_DISTRO=foxy
 else
     echo "未找到ROS2安装"
     exit 1
