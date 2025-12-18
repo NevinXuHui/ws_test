@@ -24,13 +24,11 @@ fi
 
 BUILD_DIR=build/${ARCH}/${ROS_DISTRO}
 INSTALL_DIR=install/${ARCH}/${ROS_DISTRO}
-LOG_DIR=log/${ARCH}/${ROS_DISTRO}
 
 echo "编译架构: $ARCH, ROS2版本: $ROS_DISTRO"
 
 colcon build --packages-up-to websocket_client_ros \
     --build-base $BUILD_DIR \
-    --install-base $INSTALL_DIR \
-    --log-base $LOG_DIR
+    --install-base $INSTALL_DIR
 
 echo "ROS2构建完成！"

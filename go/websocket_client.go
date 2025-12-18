@@ -33,13 +33,17 @@ import (
 )
 
 var (
-	conn      *websocket.Conn
-	connected bool
-	mu        sync.Mutex
-	stopChan  chan struct{}
-	deviceCfg map[string]interface{}
-	logger    *log.Logger
-	logFile   *os.File
+	conn        *websocket.Conn
+	connID      int
+	connected   bool
+	connecting  bool
+	reconnecting bool
+	mu          sync.Mutex
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	deviceCfg   map[string]interface{}
+	logger      *log.Logger
+	logFile     *os.File
 )
 
 func initLogger(path string, logToConsole bool) {
@@ -67,11 +71,36 @@ func initLogger(path string, logToConsole bool) {
 	}
 }
 
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
+)
+
 func logf(format string, args ...interface{}) {
 	if logger == nil {
 		logger = log.New(os.Stdout, "", 0)
 	}
 	logger.Printf("[%s] "+format, append([]interface{}{now()}, args...)...)
+}
+
+func logSend(id int, msg string) {
+	logf("%s[conn#%d] 发送: %s%s", colorGreen, id, msg, colorReset)
+}
+
+func logRecv(id int, msg string) {
+	logf("%s[conn#%d] 收到: %s%s", colorCyan, id, msg, colorReset)
+}
+
+func logErr(format string, args ...interface{}) {
+	logf("%s"+format+"%s", append(append([]interface{}{colorRed}, args...), colorReset)...)
+}
+
+func logWarn(format string, args ...interface{}) {
+	logf("%s"+format+"%s", append(append([]interface{}{colorYellow}, args...), colorReset)...)
 }
 
 //export SetMessageCallback
@@ -86,17 +115,31 @@ func SetDisconnectCallback(cb C.DisconnectCallback) {
 
 //export ConnectWithConfig
 func ConnectWithConfig(configPath *C.char) C.int {
+	mu.Lock()
+	if connecting {
+		mu.Unlock()
+		return -3
+	}
+	connecting = true
+	mu.Unlock()
+
 	path := C.GoString(configPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		logf("读取配置文件失败: %v", err)
-		return -3
+		mu.Lock()
+		connecting = false
+		mu.Unlock()
+		return -4
 	}
 
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		logf("解析配置文件失败: %v", err)
-		return -4
+		mu.Lock()
+		connecting = false
+		mu.Unlock()
+		return -5
 	}
 
 	// 初始化日志
@@ -107,7 +150,7 @@ func ConnectWithConfig(configPath *C.char) C.int {
 	initLogger(getStr(cfg, "logPath", ""), logToConsole)
 
 	logf("加载配置: %s", path)
-	return doConnect(cfg)
+	return doConnectInternal(cfg)
 }
 
 //export Connect
@@ -124,32 +167,81 @@ func Connect(deviceId, macId, sn, cmei, deviceType, firmwareVersion, softwareVer
 
 func doConnect(cfg map[string]interface{}) C.int {
 	mu.Lock()
-	defer mu.Unlock()
+	if connecting {
+		mu.Unlock()
+		return -3
+	}
+	connecting = true
+	mu.Unlock()
+	return doConnectInternal(cfg)
+}
+
+func doConnectInternal(cfg map[string]interface{}) C.int {
+	mu.Lock()
+	logf("doConnect 开始")
+
+	// 先关闭旧连接
+	if connected || conn != nil {
+		reconnecting = true
+		connected = false
+		logf("设置 reconnecting=true, connected=false")
+		if stopChan != nil {
+			close(stopChan)
+			logf("stopChan 已关闭")
+		}
+		if conn != nil {
+			conn.Close()
+			logf("旧连接已关闭")
+		}
+		conn = nil
+		mu.Unlock()
+		
+		// 等待旧 goroutine 退出
+		logf("等待旧 goroutine 退出")
+		wg.Wait()
+		logf("旧 goroutine 已退出")
+		
+		mu.Lock()
+	}
 
 	deviceCfg = cfg
+	reconnecting = false
 
+	logf("开始获取 WebSocket URL")
+	mu.Unlock()
 	wsURL, err := getURL(deviceCfg)
+	mu.Lock()
 	if err != nil {
 		logf("获取URL失败: %v", err)
+		connecting = false
+		mu.Unlock()
 		return -1
 	}
 
+	logf("开始连接 WebSocket")
 	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		logf("连接失败: %v", err)
+		connecting = false
+		mu.Unlock()
 		return -2
 	}
 
 	conn = c
 	connected = true
+	connecting = false
+	connID++
+	currentConnID := connID
 	stopChan = make(chan struct{})
 
-	logf("WebSocket连接成功")
+	logf("[conn#%d] WebSocket连接成功", currentConnID)
 
 	sendHB()
-	go heartbeatLoop()
-	go messageLoop()
+	wg.Add(2)
+	go heartbeatLoop(currentConnID)
+	go messageLoop(currentConnID)
 
+	mu.Unlock()
 	return 0
 }
 
@@ -158,6 +250,7 @@ func Disconnect() {
 	mu.Lock()
 	defer mu.Unlock()
 
+	logf("Disconnect 调用, connected=%v", connected)
 	if connected {
 		connected = false
 		if stopChan != nil {
@@ -193,14 +286,19 @@ func SendMsg(message *C.char) C.int {
 	if !connected || conn == nil {
 		return -1
 	}
-	err := conn.WriteMessage(websocket.TextMessage, []byte(C.GoString(message)))
+	msg := C.GoString(message)
+	err := conn.WriteMessage(websocket.TextMessage, []byte(msg))
 	if err != nil {
+		logErr("[conn#%d] 发送失败: %v", connID, err)
 		return -2
 	}
+	logSend(connID, msg)
 	return 0
 }
 
-func heartbeatLoop() {
+func heartbeatLoop(id int) {
+	defer wg.Done()
+	logf("[conn#%d] heartbeatLoop 启动", id)
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -209,21 +307,26 @@ func heartbeatLoop() {
 		case <-ticker.C:
 			mu.Lock()
 			if !connected {
+				logf("[conn#%d] heartbeatLoop 退出: connected=false", id)
 				mu.Unlock()
 				return
 			}
 			sendHB()
 			mu.Unlock()
 		case <-stopChan:
+			logf("[conn#%d] heartbeatLoop 退出: stopChan 关闭", id)
 			return
 		}
 	}
 }
 
-func messageLoop() {
+func messageLoop(id int) {
+	defer wg.Done()
+	logf("[conn#%d] messageLoop 启动", id)
 	for {
 		mu.Lock()
 		if !connected || conn == nil {
+			logf("[conn#%d] messageLoop 退出: connected=%v, conn=%v", id, connected, conn != nil)
 			mu.Unlock()
 			return
 		}
@@ -232,18 +335,24 @@ func messageLoop() {
 
 		_, msg, err := c.ReadMessage()
 		if err != nil {
-			logf("连接断开: %v", err)
 			mu.Lock()
+			logErr("[conn#%d] ReadMessage 错误: %v, reconnecting=%v", id, err, reconnecting)
+			// 主动重连时不调用断开回调
+			if reconnecting {
+				logf("[conn#%d] 主动重连中，跳过断开回调", id)
+				mu.Unlock()
+				return
+			}
 			connected = false
 			mu.Unlock()
 			
-			// 调用断开回调
+			logErr("[conn#%d] 连接异常断开，调用断开回调", id)
 			C.callDisconnCb()
 			return
 		}
 
 		msgStr := string(msg)
-		logf("收到: %s", msgStr)
+		logRecv(id, msgStr)
 
 		// 调用消息回调
 		cMsg := C.CString(msgStr)
@@ -265,7 +374,7 @@ func sendHB() {
 	}
 	data, _ := json.Marshal(hb)
 	conn.WriteMessage(websocket.TextMessage, data)
-	logf("心跳已发送")
+	logSend(connID, string(data))
 }
 
 func getStr(cfg map[string]interface{}, key, def string) string {
