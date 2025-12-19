@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>webtransport_client_ros</name>
+  <version>1.0.0</version>
+  <description>WebTransport client ROS2 node</description>
+  <maintainer email="dev@example.com">dev</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

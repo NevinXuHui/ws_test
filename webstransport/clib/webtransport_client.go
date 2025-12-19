@@ -21,7 +21,8 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"sync"
+	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/quic-go/quic-go"
@@ -29,13 +30,14 @@ import (
 )
 
 var (
-	session   *webtransport.Session
-	stream    *webtransport.Stream
-	dialer    *webtransport.Dialer
-	connected bool
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	session      atomic.Pointer[webtransport.Session]
+	stream       atomic.Pointer[webtransport.Stream]
+	dialer       *webtransport.Dialer
+	connected    atomic.Bool
+	connecting   atomic.Bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	disconnected atomic.Bool
 )
 
 type Config struct {
@@ -54,8 +56,13 @@ func SetDisconnectCallback(cb C.DisconnectCallback) {
 
 //export ConnectWithConfig
 func ConnectWithConfig(configPath *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
+	if !connecting.CompareAndSwap(false, true) {
+		return -2 // 正在连接中
+	}
+	defer connecting.Store(false)
+
+	// 先断开旧连接
+	doDisconnect()
 
 	data, err := os.ReadFile(C.GoString(configPath))
 	if err != nil {
@@ -67,75 +74,111 @@ func ConnectWithConfig(configPath *C.char) C.int {
 		log.Printf("parse config failed: %v", err)
 		return -1
 	}
+	log.Printf("connecting to %s", cfg.ServerUrl)
 
 	dialer = &webtransport.Dialer{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 			NextProtos:         []string{"h3"},
 		},
-		QUICConfig: &quic.Config{EnableDatagrams: true},
+		QUICConfig: &quic.Config{
+			EnableDatagrams: true,
+			MaxIdleTimeout:  5 * time.Second,
+			KeepAlivePeriod: 2 * time.Second,
+		},
 	}
 
 	ctx, cancel = context.WithCancel(context.Background())
-	_, session, err = dialer.Dial(ctx, cfg.ServerUrl, nil)
+	disconnected.Store(false)
+
+	_, sess, err := dialer.Dial(ctx, cfg.ServerUrl, nil)
 	if err != nil {
 		log.Printf("dial failed: %v", err)
 		return -1
 	}
+	session.Store(sess)
 
-	// 打开可靠流
-	stream, err = session.OpenStreamSync(ctx)
+	st, err := sess.OpenStreamSync(ctx)
 	if err != nil {
 		log.Printf("open stream failed: %v", err)
 		return -1
 	}
+	stream.Store(st)
 
-	connected = true
-	go receiveLoop()
+	connected.Store(true)
+	log.Println("connected")
+
+	go receiveLoop(sess, st)
 	return 0
 }
 
-func receiveLoop() {
-	// 接收可靠消息
+func doDisconnect() {
+	connected.Store(false)
+	if cancel != nil {
+		cancel()
+		cancel = nil
+	}
+	if sess := session.Load(); sess != nil {
+		sess.CloseWithError(0, "bye")
+		session.Store(nil)
+	}
+	if dialer != nil {
+		dialer.Close()
+		dialer = nil
+	}
+	stream.Store(nil)
+}
+
+func onDisconnect() {
+	if !disconnected.CompareAndSwap(false, true) {
+		return
+	}
+	connected.Store(false)
+	log.Println("disconnected")
+	C.callDisconnCb()
+}
+
+func receiveLoop(sess *webtransport.Session, st *webtransport.Stream) {
+	go func() {
+		<-sess.Context().Done()
+		onDisconnect()
+	}()
+
 	go func() {
 		buf := make([]byte, 65536)
 		for {
-			n, err := stream.Read(buf)
+			n, err := st.Read(buf)
 			if err != nil {
-				break
+				onDisconnect()
+				return
 			}
 			msg := C.CString(string(buf[:n]))
-			C.callMsgCb(msg, 1) // reliable=1
+			C.callMsgCb(msg, 1)
 			C.free(unsafe.Pointer(msg))
 		}
 	}()
 
-	// 接收不可靠消息
 	for {
-		data, err := session.ReceiveDatagram(ctx)
+		data, err := sess.ReceiveDatagram(ctx)
 		if err != nil {
-			break
+			onDisconnect()
+			return
 		}
 		msg := C.CString(string(data))
-		C.callMsgCb(msg, 0) // reliable=0
+		C.callMsgCb(msg, 0)
 		C.free(unsafe.Pointer(msg))
 	}
-
-	mu.Lock()
-	connected = false
-	mu.Unlock()
-	C.callDisconnCb()
 }
 
 //export SendReliable
 func SendReliable(message *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-	if !connected || stream == nil {
+	st := stream.Load()
+	if !connected.Load() || st == nil {
 		return -1
 	}
-	_, err := stream.Write([]byte(C.GoString(message)))
+	_, err := st.Write([]byte(C.GoString(message)))
 	if err != nil {
+		log.Printf("send reliable error: %v", err)
 		return -1
 	}
 	return 0
@@ -143,12 +186,12 @@ func SendReliable(message *C.char) C.int {
 
 //export SendUnreliable
 func SendUnreliable(message *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-	if !connected || session == nil {
+	sess := session.Load()
+	if !connected.Load() || sess == nil {
 		return -1
 	}
-	if err := session.SendDatagram([]byte(C.GoString(message))); err != nil {
+	if err := sess.SendDatagram([]byte(C.GoString(message))); err != nil {
+		log.Printf("send unreliable error: %v", err)
 		return -1
 	}
 	return 0
@@ -156,27 +199,12 @@ func SendUnreliable(message *C.char) C.int {
 
 //export Disconnect
 func Disconnect() {
-	mu.Lock()
-	defer mu.Unlock()
-	if session != nil {
-		session.CloseWithError(0, "bye")
-		session = nil
-	}
-	if dialer != nil {
-		dialer.Close()
-		dialer = nil
-	}
-	if cancel != nil {
-		cancel()
-	}
-	connected = false
+	doDisconnect()
 }
 
 //export IsConnected
 func IsConnected() C.int {
-	mu.Lock()
-	defer mu.Unlock()
-	if connected {
+	if connected.Load() {
 		return 1
 	}
 	return 0

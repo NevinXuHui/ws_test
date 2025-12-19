@@ -6,10 +6,10 @@ case "$1" in
         cd server && go run main.go
         ;;
     client)
-        cd client && go run main.go
+        cd client && go run main.go $2
         ;;
     *)
-        echo "Usage: $0 {server|client}"
+        echo "Usage: $0 {server|client [local|remote]}"
         exit 1
         ;;
 esac

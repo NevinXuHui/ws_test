@@ -2,13 +2,17 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 )
+
+var deviceCounter int
 
 func main() {
 	certFile := "cert.pem"
@@ -19,7 +23,9 @@ func main() {
 			Addr:      ":4433",
 			TLSConfig: generateTLSConfig(certFile, keyFile),
 			QUICConfig: &quic.Config{
-				EnableDatagrams: true, // 启用不可靠传输
+				EnableDatagrams: true,
+				MaxIdleTimeout:  5 * time.Second,
+				KeepAlivePeriod: 2 * time.Second,
 			},
 		},
 		CheckOrigin: func(r *http.Request) bool { return true },
@@ -31,8 +37,11 @@ func main() {
 			log.Printf("upgrade failed: %v", err)
 			return
 		}
-		log.Printf("new session from %s", session.RemoteAddr())
-		go handleSession(session)
+		deviceCounter++
+		deviceID := fmt.Sprintf("Device-%d", deviceCounter)
+		addr := session.RemoteAddr().String()
+		log.Printf("[%s] connected (%s)", deviceID, addr)
+		go handleSession(session, deviceID)
 	})
 
 	log.Println("WebTransport server listening on :4433")
@@ -41,42 +50,35 @@ func main() {
 	}
 }
 
-func handleSession(session *webtransport.Session) {
+func handleSession(session *webtransport.Session, addr string) {
 	ctx := session.Context()
 
-	// 处理可靠双向流
 	go func() {
 		for {
 			stream, err := session.AcceptStream(ctx)
 			if err != nil {
-				log.Printf("accept stream error: %v", err)
 				return
 			}
-			go handleStream(stream)
+			go handleStream(stream, addr)
 		}
 	}()
 
-	// 处理不可靠数据报
 	go func() {
 		for {
 			data, err := session.ReceiveDatagram(ctx)
 			if err != nil {
-				log.Printf("receive datagram error: %v", err)
 				return
 			}
-			log.Printf("[Datagram] received: %s", string(data))
-			// 回显
-			if err := session.SendDatagram(data); err != nil {
-				log.Printf("send datagram error: %v", err)
-			}
+			log.Printf("[%s] [Datagram] %s", addr, string(data))
+			session.SendDatagram(data)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("session closed")
+	log.Printf("[%s] disconnected", addr)
 }
 
-func handleStream(stream *webtransport.Stream) {
+func handleStream(stream *webtransport.Stream, addr string) {
 	defer stream.Close()
 	buf := make([]byte, 4096)
 	for {
@@ -84,8 +86,7 @@ func handleStream(stream *webtransport.Stream) {
 		if err != nil {
 			return
 		}
-		log.Printf("[Stream] received: %s", string(buf[:n]))
-		// 回显
+		log.Printf("[%s] [Stream] %s", addr, string(buf[:n]))
 		stream.Write(buf[:n])
 	}
 }

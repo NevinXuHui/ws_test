@@ -7,7 +7,7 @@ mkdir -p "$OUT_DIR"
 
 CGO_ENABLED=1 go build -buildmode=c-shared -o "${OUT_DIR}/libwebtransport_client.so" webtransport_client.go
 
-# 复制头文件
-cp "${OUT_DIR}/libwebtransport_client.h" ../cpp/include/ 2>/dev/null || true
+# 删除自动生成的头文件，使用手写的
+rm -f "${OUT_DIR}/libwebtransport_client.h"
 
 echo "Built: ${OUT_DIR}/libwebtransport_client.so"
