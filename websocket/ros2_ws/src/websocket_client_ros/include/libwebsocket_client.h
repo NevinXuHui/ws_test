@@ -12,6 +12,8 @@
 
 #ifndef GO_CGO_GOSTRING_TYPEDEF
 typedef struct { const char *p; ptrdiff_t n; } _GoString_;
+extern size_t _GoStringLen(_GoString_ s);
+extern const char *_GoStringPtr(_GoString_ s);
 #endif
 
 #endif
@@ -60,9 +62,15 @@ typedef size_t GoUintptr;
 typedef float GoFloat32;
 typedef double GoFloat64;
 #ifdef _MSC_VER
+#if !defined(__cplusplus) || _MSVC_LANG <= 201402L
 #include <complex.h>
 typedef _Fcomplex GoComplex64;
 typedef _Dcomplex GoComplex128;
+#else
+#include <complex>
+typedef std::complex<float> GoComplex64;
+typedef std::complex<double> GoComplex128;
+#endif
 #else
 typedef float _Complex GoComplex64;
 typedef double _Complex GoComplex128;
@@ -94,8 +102,8 @@ extern void SetMessageCallback(MessageCallback cb);
 extern void SetDisconnectCallback(DisconnectCallback cb);
 extern int ConnectWithConfig(char* configPath);
 extern int Connect(char* deviceId, char* macId, char* sn, char* cmei, char* deviceType, char* firmwareVersion, char* softwareVersion, char* sdkVersion, char* innerType, char* snPwd);
-extern void Disconnect();
-extern int IsConnected();
+extern void Disconnect(void);
+extern int IsConnected(void);
 extern int SendMsg(char* message);
 
 #ifdef __cplusplus
